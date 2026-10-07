@@ -1,0 +1,340 @@
+diff --git a/kernel/Kbuild b/kernel/Kbuild
+index baa32a37..2bb9215c 100644
+--- a/kernel/Kbuild
++++ b/kernel/Kbuild
+@@ -38,6 +38,7 @@ kernelsu-objs += sulog/fd.o
+ kernelsu-objs += supercall/dispatch.o
+ kernelsu-objs += supercall/perm.o
+ kernelsu-objs += supercall/supercall.o
++kernelsu-objs += supercall/susfs_prctl.o
+ 
+ kernelsu-objs += feature/adb_root.o
+ kernelsu-objs += feature/selinux_hide.o
+diff --git a/kernel/supercall/supercall.c b/kernel/supercall/supercall.c
+index 1bfa9952..2cd52280 100644
+--- a/kernel/supercall/supercall.c
++++ b/kernel/supercall/supercall.c
+@@ -299,6 +299,11 @@ static struct kprobe reboot_kp = {
+ };
+ #endif
+ 
++#ifdef CONFIG_KSU_SUSFS
++extern void __init ksu_susfs_prctl_init(void);
++extern void __exit ksu_susfs_prctl_exit(void);
++#endif
++
+ void __init ksu_supercalls_init(void)
+ {
+ 	int i;
+@@ -313,6 +318,9 @@ void __init ksu_supercalls_init(void)
+ 		pr_info("reboot kprobe registered successfully\n");
+ 	}
+ #endif
++#ifdef CONFIG_KSU_SUSFS
++	ksu_susfs_prctl_init();
++#endif
+ }
+ 
+ void __exit ksu_supercalls_exit(void){
+@@ -321,6 +329,9 @@ void __exit ksu_supercalls_exit(void){
+ #ifdef KSU_KPROBES_HOOK
+ 	unregister_kprobe(&reboot_kp);
+ #endif
++#ifdef CONFIG_KSU_SUSFS
++	ksu_susfs_prctl_exit();
++#endif
+ 
+ 	ksu_supercall_cleanup_state();
+ }
+diff --git a/kernel/supercall/susfs_prctl.c b/kernel/supercall/susfs_prctl.c
+new file mode 100644
+index 00000000..66760e3a
+--- /dev/null
++++ b/kernel/supercall/susfs_prctl.c
+@@ -0,0 +1,286 @@
++// SPDX-License-Identifier: GPL-2.0
++// Adds a prctl(KERNEL_SU_OPTION, CMD_SUSFS_*, ...) entry point for SUSFS on
++// KernelSU-Next legacy, which only hooks sys_reboot by default. Mirrors the
++// official susfs4ksu core_hook.c dispatch, routed through a kprobe instead.
++
++#ifdef CONFIG_KSU_SUSFS
++
++#include <linux/kprobes.h>
++#include <linux/uaccess.h>
++#include <linux/susfs.h>
++
++#include "arch.h"
++#include "compat/kernel_compat.h"
++#include "klog.h" // IWYU pragma: keep
++
++#define KERNEL_SU_OPTION 0xDEADBEEF
++
++extern int susfs_add_sus_path(struct st_susfs_sus_path __user *user_info);
++extern int susfs_add_sus_mount(struct st_susfs_sus_mount __user *user_info);
++#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
++extern int susfs_add_sus_kstat(struct st_susfs_sus_kstat __user *user_info);
++extern int susfs_update_sus_kstat(struct st_susfs_sus_kstat __user *user_info);
++#endif
++#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
++extern int susfs_add_try_umount(struct st_susfs_try_umount __user *user_info);
++extern void susfs_run_try_umount_for_current_mnt_ns(void);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
++extern int susfs_set_uname(struct st_susfs_uname __user *user_info);
++#endif
++extern void susfs_set_log(bool enabled);
++#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
++extern int susfs_set_cmdline_or_bootconfig(char __user *user_fake_boot_config);
++#endif
++#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
++extern int susfs_add_open_redirect(struct st_susfs_open_redirect __user *user_info);
++#endif
++
++static long susfs_prctl_dispatch(unsigned long arg2, unsigned long arg3,
++				  unsigned long arg5)
++{
++	if (current_uid().val != 0)
++		return 0;
++
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++	if (arg2 == CMD_SUSFS_ADD_SUS_PATH) {
++		int error = 0;
++		if (!ksu_access_ok((void __user *)arg3, sizeof(struct st_susfs_sus_path)))
++			return 0;
++		if (!ksu_access_ok((void __user *)arg5, sizeof(error)))
++			return 0;
++		error = susfs_add_sus_path((struct st_susfs_sus_path __user *)arg3);
++		pr_info("susfs: CMD_SUSFS_ADD_SUS_PATH -> ret: %d\n", error);
++		copy_to_user((void __user *)arg5, &error, sizeof(error));
++		return 0;
++	}
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
++	if (arg2 == CMD_SUSFS_ADD_SUS_MOUNT) {
++		int error = 0;
++		if (!ksu_access_ok((void __user *)arg3, sizeof(struct st_susfs_sus_mount)))
++			return 0;
++		if (!ksu_access_ok((void __user *)arg5, sizeof(error)))
++			return 0;
++		error = susfs_add_sus_mount((struct st_susfs_sus_mount __user *)arg3);
++		pr_info("susfs: CMD_SUSFS_ADD_SUS_MOUNT -> ret: %d\n", error);
++		copy_to_user((void __user *)arg5, &error, sizeof(error));
++		return 0;
++	}
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
++	if (arg2 == CMD_SUSFS_ADD_SUS_KSTAT) {
++		int error = 0;
++		if (!ksu_access_ok((void __user *)arg3, sizeof(struct st_susfs_sus_kstat)))
++			return 0;
++		if (!ksu_access_ok((void __user *)arg5, sizeof(error)))
++			return 0;
++		error = susfs_add_sus_kstat((struct st_susfs_sus_kstat __user *)arg3);
++		pr_info("susfs: CMD_SUSFS_ADD_SUS_KSTAT -> ret: %d\n", error);
++		copy_to_user((void __user *)arg5, &error, sizeof(error));
++		return 0;
++	}
++	if (arg2 == CMD_SUSFS_UPDATE_SUS_KSTAT) {
++		int error = 0;
++		if (!ksu_access_ok((void __user *)arg3, sizeof(struct st_susfs_sus_kstat)))
++			return 0;
++		if (!ksu_access_ok((void __user *)arg5, sizeof(error)))
++			return 0;
++		error = susfs_update_sus_kstat((struct st_susfs_sus_kstat __user *)arg3);
++		pr_info("susfs: CMD_SUSFS_UPDATE_SUS_KSTAT -> ret: %d\n", error);
++		copy_to_user((void __user *)arg5, &error, sizeof(error));
++		return 0;
++	}
++#endif
++#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
++	if (arg2 == CMD_SUSFS_ADD_TRY_UMOUNT) {
++		int error = 0;
++		if (!ksu_access_ok((void __user *)arg3, sizeof(struct st_susfs_try_umount)))
++			return 0;
++		if (!ksu_access_ok((void __user *)arg5, sizeof(error)))
++			return 0;
++		error = susfs_add_try_umount((struct st_susfs_try_umount __user *)arg3);
++		pr_info("susfs: CMD_SUSFS_ADD_TRY_UMOUNT -> ret: %d\n", error);
++		copy_to_user((void __user *)arg5, &error, sizeof(error));
++		return 0;
++	}
++	if (arg2 == CMD_SUSFS_RUN_UMOUNT_FOR_CURRENT_MNT_NS) {
++		susfs_run_try_umount_for_current_mnt_ns();
++		pr_info("susfs: CMD_SUSFS_RUN_UMOUNT_FOR_CURRENT_MNT_NS -> ret: 0\n");
++		return 0;
++	}
++#endif
++#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
++	if (arg2 == CMD_SUSFS_SET_UNAME) {
++		int error = 0;
++		if (!ksu_access_ok((void __user *)arg3, sizeof(struct st_susfs_uname)))
++			return 0;
++		if (!ksu_access_ok((void __user *)arg5, sizeof(error)))
++			return 0;
++		error = susfs_set_uname((struct st_susfs_uname __user *)arg3);
++		pr_info("susfs: CMD_SUSFS_SET_UNAME -> ret: %d\n", error);
++		copy_to_user((void __user *)arg5, &error, sizeof(error));
++		return 0;
++	}
++#endif
++	if (arg2 == CMD_SUSFS_ENABLE_LOG) {
++		int error = 0;
++		if (arg3 != 0 && arg3 != 1)
++			return 0;
++		susfs_set_log(arg3);
++		copy_to_user((void __user *)arg5, &error, sizeof(error));
++		return 0;
++	}
++#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
++	if (arg2 == CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG) {
++		int error = 0;
++		if (!ksu_access_ok((void __user *)arg3, SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE))
++			return 0;
++		if (!ksu_access_ok((void __user *)arg5, sizeof(error)))
++			return 0;
++		error = susfs_set_cmdline_or_bootconfig((char __user *)arg3);
++		pr_info("susfs: CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG -> ret: %d\n", error);
++		copy_to_user((void __user *)arg5, &error, sizeof(error));
++		return 0;
++	}
++#endif
++#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
++	if (arg2 == CMD_SUSFS_ADD_OPEN_REDIRECT) {
++		int error = 0;
++		if (!ksu_access_ok((void __user *)arg3, sizeof(struct st_susfs_open_redirect)))
++			return 0;
++		if (!ksu_access_ok((void __user *)arg5, sizeof(error)))
++			return 0;
++		error = susfs_add_open_redirect((struct st_susfs_open_redirect __user *)arg3);
++		pr_info("susfs: CMD_SUSFS_ADD_OPEN_REDIRECT -> ret: %d\n", error);
++		copy_to_user((void __user *)arg5, &error, sizeof(error));
++		return 0;
++	}
++#endif
++	if (arg2 == CMD_SUSFS_SHOW_VERSION) {
++		int error;
++		int len = strlen(SUSFS_VERSION);
++		if (!ksu_access_ok((void __user *)arg3, len + 1))
++			return 0;
++		if (!ksu_access_ok((void __user *)arg5, sizeof(error)))
++			return 0;
++		error = copy_to_user((void __user *)arg3, SUSFS_VERSION, len + 1);
++		pr_info("susfs: CMD_SUSFS_SHOW_VERSION -> ret: %d\n", error);
++		copy_to_user((void __user *)arg5, &error, sizeof(error));
++		return 0;
++	}
++	if (arg2 == CMD_SUSFS_SHOW_VARIANT) {
++		int error;
++		int len = strlen(SUSFS_VARIANT);
++		if (!ksu_access_ok((void __user *)arg3, len + 1))
++			return 0;
++		if (!ksu_access_ok((void __user *)arg5, sizeof(error)))
++			return 0;
++		error = copy_to_user((void __user *)arg3, SUSFS_VARIANT, len + 1);
++		pr_info("susfs: CMD_SUSFS_SHOW_VARIANT -> ret: %d\n", error);
++		copy_to_user((void __user *)arg5, &error, sizeof(error));
++		return 0;
++	}
++	if (arg2 == CMD_SUSFS_SHOW_ENABLED_FEATURES) {
++		int error;
++		u64 enabled_features = 0;
++		if (!ksu_access_ok((void __user *)arg3, sizeof(u64)))
++			return 0;
++		if (!ksu_access_ok((void __user *)arg5, sizeof(error)))
++			return 0;
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++		enabled_features |= (1 << 0);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
++		enabled_features |= (1 << 1);
++#endif
++#ifdef CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
++		enabled_features |= (1 << 2);
++#endif
++#ifdef CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
++		enabled_features |= (1 << 3);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
++		enabled_features |= (1 << 4);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_OVERLAYFS
++		enabled_features |= (1 << 5);
++#endif
++#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
++		enabled_features |= (1 << 6);
++#endif
++#ifdef CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
++		enabled_features |= (1 << 7);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
++		enabled_features |= (1 << 8);
++#endif
++#ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
++		enabled_features |= (1 << 9);
++#endif
++#ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
++		enabled_features |= (1 << 10);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
++		enabled_features |= (1 << 11);
++#endif
++#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
++		enabled_features |= (1 << 12);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_SU
++		enabled_features |= (1 << 13);
++#endif
++#ifdef CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT
++		enabled_features |= (1 << 14);
++#endif
++		error = copy_to_user((void __user *)arg3, &enabled_features, sizeof(enabled_features));
++		pr_info("susfs: CMD_SUSFS_SHOW_ENABLED_FEATURES -> ret: %d\n", error);
++		copy_to_user((void __user *)arg5, &error, sizeof(error));
++		return 0;
++	}
++
++	return 0;
++}
++
++#ifdef KSU_KPROBES_HOOK
++static int susfs_prctl_handler_pre(struct kprobe *p, struct pt_regs *regs)
++{
++	struct pt_regs *real_regs = PT_REAL_REGS(regs);
++	unsigned long option = (unsigned long)PT_REGS_PARM1(real_regs);
++	unsigned long arg2 = (unsigned long)PT_REGS_PARM2(real_regs);
++	unsigned long arg3 = (unsigned long)PT_REGS_PARM3(real_regs);
++	unsigned long arg5 = (unsigned long)PT_REGS_PARM5(real_regs);
++
++	if (option != KERNEL_SU_OPTION)
++		return 0;
++
++	susfs_prctl_dispatch(arg2, arg3, arg5);
++	return 0;
++}
++
++static struct kprobe susfs_prctl_kp = {
++	.symbol_name = "__arm64_sys_prctl",
++	.pre_handler = susfs_prctl_handler_pre,
++};
++#endif // #ifdef KSU_KPROBES_HOOK
++
++void __init ksu_susfs_prctl_init(void)
++{
++#ifdef KSU_KPROBES_HOOK
++	int rc = register_kprobe(&susfs_prctl_kp);
++	if (rc) {
++		pr_err("susfs prctl kprobe failed: %d\n", rc);
++	} else {
++		pr_info("susfs prctl kprobe registered successfully\n");
++	}
++#endif
++}
++
++void __exit ksu_susfs_prctl_exit(void)
++{
++#ifdef KSU_KPROBES_HOOK
++	unregister_kprobe(&susfs_prctl_kp);
++#endif
++}
++
++#endif // #ifdef CONFIG_KSU_SUSFS
