@@ -1,0 +1,72 @@
+name: build-kernel
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk and add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo fallocate -l 8G /mnt/swapfile && sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile && sudo swapon /mnt/swapfile
+          df -h / /mnt; free -h
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-core flex bison build-essential zip curl libssl-dev bc python3 rsync cpio lz4 libncurses-dev
+          curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+          chmod +x ~/repo
+          git config --global user.email ci@example.com
+          git config --global user.name ci
+          git config --global color.ui false
+      - name: Sync AOSP kernel tree
+        run: |
+          mkdir -p ~/gki && cd ~/gki
+          ~/repo init -u https://android.googlesource.com/kernel/manifest -b common-android12-5.4 --depth=1
+          ~/repo sync -c --no-tags --no-clone-bundle -j4
+      - name: Pin kernel to your tag, apply changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ~/gki/common
+          R=$(git remote | head -1)
+          git fetch --depth=1 "$R" tag android12-5.4.254_r00
+          git checkout -f tags/android12-5.4.254_r00
+          git apply --binary "$GITHUB_WORKSPACE/patches/susfs-kernel.patch"
+          git clone https://github.com/KernelSU-Next/KernelSU-Next KernelSU-Next
+          cd KernelSU-Next
+          git checkout v3.4.0-legacy
+          git apply --binary "$GITHUB_WORKSPACE/patches/susfs-ksunext.patch"
+          cp "$GITHUB_WORKSPACE/scmversion.txt" ~/gki/common/.scmversion
+          cat ~/gki/common/.scmversion; echo
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ~/gki
+          SKIP_MRPROPER=1 BUILD_CONFIG=common/build.config.ksu ./build/build.sh 2>&1 | tee ~/build.log
+          test -f out/android12-5.4/dist/Image
+      - name: Check version string
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f ~/gki/out/android12-5.4/dist/Image
+          strings ~/gki/out/android12-5.4/dist/Image > /tmp/s.txt
+          grep -m1 "Linux version" /tmp/s.txt
+          grep -m1 "Linux version" /tmp/s.txt | grep -q -- '-ab603 ('
+      - name: List undefined symbols
+        if: failure()
+        shell: bash
+        run: |
+          grep -E "undefined (reference|symbol)" ~/build.log | sort -u || true
+          echo "--- first error lines ---"
+          grep -m5 "error:" ~/build.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kernel-dist
+          path: |
+            /home/runner/gki/out/android12-5.4/dist
+            /home/runner/build.log
