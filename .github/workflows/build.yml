@@ -55,8 +55,8 @@ jobs:
           set -euo pipefail
           test -f ~/gki/out/android12-5.4/dist/Image
           strings ~/gki/out/android12-5.4/dist/Image > /tmp/s.txt
-          grep -m1 "Linux version" /tmp/s.txt
-          grep -m1 "Linux version" /tmp/s.txt | grep -q -- '-ab603 ('
+          grep -m1 "^Linux version 5" /tmp/s.txt
+          grep -m1 "^Linux version 5" /tmp/s.txt | grep -q -- '-ab603 ('
       - name: List undefined symbols
         if: failure()
         shell: bash
