@@ -1,0 +1,33 @@
+diff --git a/kernel/hook/setuid_hook.c b/kernel/hook/setuid_hook.c
+index 3184deb2..aa87d542 100644
+--- a/kernel/hook/setuid_hook.c
++++ b/kernel/hook/setuid_hook.c
+@@ -21,6 +21,9 @@
+ #include "hook/hook_manager.h"
+ #include "feature/kernel_umount.h"
+ #include "compat/kernel_compat.h"
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++#include <linux/susfs_def.h>
++#endif
+ 
+ extern void disable_seccomp(struct task_struct *tsk);
+ 
+@@ -64,6 +67,18 @@ int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)
+ 	} else {
+ #ifdef KSU_KPROBES_HOOK
+ 		ksu_clear_task_tracepoint_flag_if_needed(current);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++		/* mark ordinary non-root app processes so SUSFS hides paths from them */
++		{
++			uid_t appid = new_uid % 100000;
++			if (appid >= 10000 && appid <= 19999) {
++				pr_info("susfs_dbg: flagged uid %u\n", new_uid);
++				task_lock(current);
++				current->susfs_task_state |= TASK_STRUCT_NON_ROOT_USER_APP_PROC;
++				task_unlock(current);
++			}
++		}
+ #endif
+     }
+ 

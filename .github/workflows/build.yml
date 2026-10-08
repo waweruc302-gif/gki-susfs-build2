@@ -40,6 +40,7 @@ jobs:
           git checkout v3.4.0-legacy
           git apply --binary "$GITHUB_WORKSPACE/patches/susfs-ksunext.patch"
           git apply --binary "$GITHUB_WORKSPACE/patches/susfs-ksunext-prctl.patch"
+          git apply --binary "$GITHUB_WORKSPACE/patches/susfs-ksunext-setuid.patch"
           cp "$GITHUB_WORKSPACE/scmversion.txt" ~/gki/common/.scmversion
           cat ~/gki/common/.scmversion; echo
       - name: Build
