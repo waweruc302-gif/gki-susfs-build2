@@ -8,7 +8,7 @@ Tecno Spark 10C, Unisoc T606 (UMS9230). This repo is for Unisoc chipsets only.
 - Build: KI5K-F065ABCDEAgAh-S-GL-20241211V618
 - Kernel: 5.4.254
 - KernelSU-Next: v3.4.0-legacy (kprobes hook mode)
-- SUSFS: v1.4.4
+- SUSFS: v1.5.5
 - Chipset: Unisoc T606, confirmed working on both 4GB and 8GB RAM variants
 
 ## How to use
