@@ -8,7 +8,7 @@ Tecno Spark 10C, Unisoc T606 (UMS9230).
 - Build: KI5K-F065ABCDEAgAh-S-GL-20241211V618
 - Kernel: 5.4.254
 - KernelSU-Next: v3.4.0-legacy (kprobes hook mode)
-- SUSFS: [VERSION]
+- SUSFS: v1.4.4
 
 ## How to use
 1. Fork this repo.
